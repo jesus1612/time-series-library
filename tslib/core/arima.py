@@ -21,7 +21,7 @@ class ARProcess(TimeSeriesModel):
     where ε_t ~ N(0, σ²) and φ₁, φ₂, ..., φₚ are AR parameters.
     """
     
-    def __init__(self, order: int, trend: str = 'c'):
+    def __init__(self, order: int, trend: str = 'c', n_jobs: int = -1):
         """
         Initialize AR process
         
@@ -31,14 +31,19 @@ class ARProcess(TimeSeriesModel):
             AR order (p)
         trend : str
             'c' (constant), 'nc' (no constant)
+        n_jobs : int
+            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
         super().__init__()
         self.order = order
         self.trend = trend
+        self.n_jobs = n_jobs
         self.ar_params = None
         self.constant = None
         self.variance = None
-        self.optimizer = MLEOptimizer()
+        self.optimizer = MLEOptimizer(n_jobs=n_jobs)
+        self.acf_calculator = ACFCalculator(n_jobs=n_jobs)
+        self.pacf_calculator = PACFCalculator(n_jobs=n_jobs)
     
     def fit(self, data: Union[np.ndarray, list], **kwargs) -> 'ARProcess':
         """
@@ -239,7 +244,7 @@ class MAProcess(TimeSeriesModel):
     where ε_t ~ N(0, σ²) and θ₁, θ₂, ..., θ_q are MA parameters.
     """
     
-    def __init__(self, order: int):
+    def __init__(self, order: int, n_jobs: int = -1):
         """
         Initialize MA process
         
@@ -247,13 +252,18 @@ class MAProcess(TimeSeriesModel):
         -----------
         order : int
             MA order (q)
+        n_jobs : int
+            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
         super().__init__()
         self.order = order
+        self.n_jobs = n_jobs
         self.ma_params = None
         self.mean = None
         self.variance = None
-        self.optimizer = MLEOptimizer()
+        self.optimizer = MLEOptimizer(n_jobs=n_jobs)
+        self.acf_calculator = ACFCalculator(n_jobs=n_jobs)
+        self.pacf_calculator = PACFCalculator(n_jobs=n_jobs)
     
     def fit(self, data: Union[np.ndarray, list], **kwargs) -> 'MAProcess':
         """
@@ -409,7 +419,7 @@ class ARMAProcess(TimeSeriesModel):
     Combines AR and MA components.
     """
     
-    def __init__(self, ar_order: int, ma_order: int, trend: str = 'c'):
+    def __init__(self, ar_order: int, ma_order: int, trend: str = 'c', n_jobs: int = -1):
         """
         Initialize ARMA process
         
@@ -421,16 +431,21 @@ class ARMAProcess(TimeSeriesModel):
             MA order (q)
         trend : str
             'c' (constant), 'nc' (no constant)
+        n_jobs : int
+            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
         super().__init__()
         self.ar_order = ar_order
         self.ma_order = ma_order
         self.trend = trend
+        self.n_jobs = n_jobs
         self.ar_params = None
         self.ma_params = None
         self.constant = None
         self.variance = None
-        self.optimizer = MLEOptimizer()
+        self.optimizer = MLEOptimizer(n_jobs=n_jobs)
+        self.acf_calculator = ACFCalculator(n_jobs=n_jobs)
+        self.pacf_calculator = PACFCalculator(n_jobs=n_jobs)
     
     def fit(self, data: Union[np.ndarray, list], **kwargs) -> 'ARMAProcess':
         """
@@ -656,7 +671,7 @@ class ARIMAProcess(ARMAProcess):
     where B is the backshift operator and d is the order of differencing.
     """
     
-    def __init__(self, ar_order: int, diff_order: int, ma_order: int, trend: str = 'c'):
+    def __init__(self, ar_order: int, diff_order: int, ma_order: int, trend: str = 'c', n_jobs: int = -1):
         """
         Initialize ARIMA process
         
@@ -670,8 +685,10 @@ class ARIMAProcess(ARMAProcess):
             MA order (q)
         trend : str
             'c' (constant), 'nc' (no constant)
+        n_jobs : int
+            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
-        super().__init__(ar_order, ma_order, trend)
+        super().__init__(ar_order, ma_order, trend, n_jobs=n_jobs)
         self.diff_order = diff_order
         self.original_data = None
         self.differenced_data = None

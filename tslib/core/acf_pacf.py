@@ -7,6 +7,8 @@ These are essential for identifying ARIMA model orders (p, q).
 
 import numpy as np
 from typing import Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing as mp
 from .base import BaseTest, SparkEnabled
 from pyspark.sql.functions import col, lit
 
@@ -19,7 +21,7 @@ class ACFCalculator:
     Formula: r_k = Σ(y_t - ȳ)(y_{t-k} - ȳ) / Σ(y_t - ȳ)²
     """
     
-    def __init__(self, max_lags: Optional[int] = None):
+    def __init__(self, max_lags: Optional[int] = None, n_jobs: int = -1):
         """
         Initialize ACF calculator
         
@@ -27,10 +29,16 @@ class ACFCalculator:
         -----------
         max_lags : int, optional
             Maximum number of lags to calculate. If None, uses n/4
+        n_jobs : int
+            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
         self.max_lags = max_lags
+        self.n_jobs = n_jobs if n_jobs > 0 else mp.cpu_count()
         self._acf_values = None
         self._lags = None
+        
+        # Umbral para paralelización
+        self.parallel_threshold = 1000  # > 1000 observaciones
     
     def calculate(self, data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -78,6 +86,21 @@ class ACFCalculator:
         lags = np.arange(max_lags + 1)
         acf_values = np.zeros(max_lags + 1)
         
+        # Usar paralelización si el dataset es grande
+        if len(data) > self.parallel_threshold and self.n_jobs > 1:
+            acf_values = self._calculate_parallel(data, mean, variance, max_lags)
+        else:
+            acf_values = self._calculate_sequential(data, mean, variance, max_lags)
+        
+        self._lags = lags
+        self._acf_values = acf_values
+        return lags, acf_values
+    
+    def _calculate_sequential(self, data: np.ndarray, mean: float, variance: float, max_lags: int) -> np.ndarray:
+        """Calculate ACF sequentially"""
+        acf_values = np.zeros(max_lags + 1)
+        n = len(data)
+        
         for k in range(max_lags + 1):
             if k == 0:
                 acf_values[k] = 1.0  # r_0 = 1
@@ -89,9 +112,24 @@ class ACFCalculator:
                 
                 acf_values[k] = numerator / variance
         
-        self._lags = lags
-        self._acf_values = acf_values
-        return lags, acf_values
+        return acf_values
+    
+    def _calculate_parallel(self, data: np.ndarray, mean: float, variance: float, max_lags: int) -> np.ndarray:
+        """Calculate ACF in parallel"""
+        def calculate_lag(k):
+            """Calculate ACF for a single lag"""
+            if k == 0:
+                return 1.0
+            else:
+                # Calculate numerator: Σ(y_t - ȳ)(y_{t-k} - ȳ)
+                numerator = np.sum((data[k:] - mean) * (data[:-k] - mean))
+                return numerator / variance
+        
+        # Calcular todos los lags en paralelo
+        with ThreadPoolExecutor(max_workers=self.n_jobs) as executor:
+            acf_values = list(executor.map(calculate_lag, range(max_lags + 1)))
+        
+        return np.array(acf_values)
     
     def get_acf_values(self) -> Optional[np.ndarray]:
         """Get the calculated ACF values"""
@@ -110,7 +148,7 @@ class PACFCalculator:
     the effects of intermediate lags. Calculated using the Durbin-Levinson algorithm.
     """
     
-    def __init__(self, max_lags: Optional[int] = None):
+    def __init__(self, max_lags: Optional[int] = None, n_jobs: int = -1):
         """
         Initialize PACF calculator
         
@@ -118,10 +156,16 @@ class PACFCalculator:
         -----------
         max_lags : int, optional
             Maximum number of lags to calculate. If None, uses n/4
+        n_jobs : int
+            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
         self.max_lags = max_lags
+        self.n_jobs = n_jobs if n_jobs > 0 else mp.cpu_count()
         self._pacf_values = None
         self._lags = None
+        
+        # Umbral para paralelización
+        self.parallel_threshold = 1000  # > 1000 observaciones
     
     def calculate(self, data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """

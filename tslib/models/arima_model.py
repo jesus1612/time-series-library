@@ -35,7 +35,8 @@ class ARIMAModel(TimeSeriesModel):
                  max_q: int = 5,
                  seasonal: bool = False,
                  seasonal_periods: Optional[int] = None,
-                 validation: bool = True):
+                 validation: bool = True,
+                 n_jobs: int = -1):
         """
         Initialize ARIMA model
         
@@ -59,6 +60,8 @@ class ARIMAModel(TimeSeriesModel):
             Number of seasonal periods
         validation : bool
             Whether to validate input data
+        n_jobs : int
+            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
         super().__init__()
         self.order = order
@@ -66,6 +69,7 @@ class ARIMAModel(TimeSeriesModel):
         self.auto_select = auto_select
         self.max_p = max_p
         self.max_d = max_d
+        self.n_jobs = n_jobs
         self.max_q = max_q
         self.seasonal = seasonal
         self.seasonal_periods = seasonal_periods
@@ -131,7 +135,8 @@ class ARIMAModel(TimeSeriesModel):
             ar_order=self.order[0],
             diff_order=self.order[1],
             ma_order=self.order[2],
-            trend=self.trend
+            trend=self.trend,
+            n_jobs=self.n_jobs
         )
         
         self._arima_process.fit(data, **kwargs)
@@ -371,7 +376,7 @@ class ARIMAModel(TimeSeriesModel):
                     
                     try:
                         # Fit model
-                        model = ARIMAProcess(p, d, q, self.trend)
+                        model = ARIMAProcess(p, d, q, self.trend, n_jobs=self.n_jobs)
                         model.fit(data)
                         
                         # Get AIC

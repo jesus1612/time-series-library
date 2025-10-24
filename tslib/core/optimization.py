@@ -9,6 +9,8 @@ import numpy as np
 from typing import Dict, Any, Optional, Callable, Tuple
 from scipy.optimize import minimize, Bounds
 from scipy.stats import norm
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import multiprocessing as mp
 from .base import BaseEstimator
 
 
@@ -24,7 +26,8 @@ class MLEOptimizer(BaseEstimator):
                  method: str = 'L-BFGS-B',
                  max_iterations: int = 1000,
                  tolerance: float = 1e-6,
-                 bounds: Optional[Dict[str, Tuple[float, float]]] = None):
+                 bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+                 n_jobs: int = -1):
         """
         Initialize MLE optimizer
         
@@ -38,13 +41,23 @@ class MLEOptimizer(BaseEstimator):
             Convergence tolerance
         bounds : dict, optional
             Parameter bounds for constrained optimization
+        n_jobs : int
+            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
         self.method = method
         self.max_iterations = max_iterations
         self.tolerance = tolerance
         self.bounds = bounds or {}
+        self.n_jobs = n_jobs if n_jobs > 0 else mp.cpu_count()
         self._optimization_result = None
         self._log_likelihood = None
+        
+        # Umbrales para paralelización
+        self.parallel_thresholds = {
+            'mle_optimization': 500,      # > 500 observaciones
+            'gradient_calculation': 1000, # > 1000 observaciones
+            'objective_evaluation': 200   # > 200 evaluaciones
+        }
     
     def estimate(self, 
                  data: np.ndarray, 
@@ -100,7 +113,16 @@ class MLEOptimizer(BaseEstimator):
         
         # Set initial parameters if not provided
         if initial_params is None:
-            initial_params = self._get_initial_params(p, q, diff_data)
+            # Usar búsqueda paralela de parámetros si el dataset es grande
+            if self._should_parallelize(len(diff_data), 'mle_optimization'):
+                print(f"   🔧 Usando búsqueda paralela de parámetros iniciales ({self.n_jobs} cores)")
+                param_ranges = self._get_parameter_ranges(p, q)
+                search_result = self._parallel_parameter_search(
+                    diff_data, model_type, param_ranges, n_samples=50, p=p, q=q
+                )
+                initial_params = search_result['params']
+            else:
+                initial_params = self._get_initial_params(p, q, diff_data)
         
         # Set up bounds
         bounds = self._setup_bounds(p, q, param_names)
@@ -520,4 +542,348 @@ class MLEOptimizer(BaseEstimator):
     def log_likelihood(self):
         """Get the log-likelihood value"""
         return self._log_likelihood
+    
+    def _should_parallelize(self, data_size: int, operation: str) -> bool:
+        """
+        Determine if operation should be parallelized based on data size
+        
+        Parameters:
+        -----------
+        data_size : int
+            Size of the data
+        operation : str
+            Type of operation ('mle_optimization', 'gradient_calculation', etc.)
+            
+        Returns:
+        --------
+        bool
+            True if should parallelize, False otherwise
+        """
+        if self.n_jobs == 1:
+            return False
+        
+        threshold = self.parallel_thresholds.get(operation, float('inf'))
+        return data_size > threshold
+    
+    def _parallel_objective_evaluation(self, params_list: list, data: np.ndarray, 
+                                     model_type: str, **kwargs) -> list:
+        """
+        Evaluate objective function for multiple parameter sets in parallel
+        
+        Parameters:
+        -----------
+        params_list : list
+            List of parameter arrays to evaluate
+        data : np.ndarray
+            Time series data
+        model_type : str
+            Type of model
+        **kwargs
+            Additional parameters
+            
+        Returns:
+        --------
+        list
+            List of objective function values
+        """
+        def evaluate_single(params):
+            # Extract parameters based on model type
+            p = kwargs.get('p', 0)
+            q = kwargs.get('q', 0)
+            
+            if p > 0 and q > 0:  # ARMA
+                ar_params = params[:p]
+                ma_params = params[p:p+q]
+                sigma2 = params[p+q]
+            elif p > 0:  # AR only
+                ar_params = params[:p]
+                ma_params = np.array([])
+                sigma2 = params[p]
+            elif q > 0:  # MA only
+                ar_params = np.array([])
+                ma_params = params[:q]
+                sigma2 = params[q]
+            else:
+                raise ValueError("At least one of p or q must be positive")
+            
+            return self._calculate_log_likelihood(data, ar_params, ma_params, sigma2)
+        
+        with ThreadPoolExecutor(max_workers=self.n_jobs) as executor:
+            results = list(executor.map(evaluate_single, params_list))
+        
+        return results
+    
+    def _parallel_gradient_calculation(self, params: np.ndarray, data: np.ndarray,
+                                     model_type: str, **kwargs) -> np.ndarray:
+        """
+        Calculate gradient in parallel for large datasets
+        
+        Parameters:
+        -----------
+        params : np.ndarray
+            Parameter values
+        data : np.ndarray
+            Time series data
+        model_type : str
+            Type of model
+        **kwargs
+            Additional parameters
+            
+        Returns:
+        --------
+        np.ndarray
+            Gradient vector
+        """
+        if not self._should_parallelize(len(data), 'gradient_calculation'):
+            return self._calculate_gradient_sequential(params, data, model_type, **kwargs)
+        
+        # Dividir cálculo de gradiente en componentes
+        n_params = len(params)
+        chunk_size = max(1, n_params // self.n_jobs)
+        
+        def calc_gradient_chunk(param_indices):
+            """Calcular gradiente para un chunk de parámetros"""
+            chunk_grad = np.zeros(n_params)
+            for i in param_indices:
+                chunk_grad[i] = self._calculate_gradient_component(
+                    params, data, model_type, i, **kwargs
+                )
+            return chunk_grad
+        
+        # Dividir índices de parámetros en chunks
+        param_indices = list(range(n_params))
+        chunks = [param_indices[i:i+chunk_size] 
+                 for i in range(0, n_params, chunk_size)]
+        
+        with ThreadPoolExecutor(max_workers=self.n_jobs) as executor:
+            gradient_chunks = list(executor.map(calc_gradient_chunk, chunks))
+        
+        # Combinar resultados
+        gradient = np.sum(gradient_chunks, axis=0)
+        return gradient
+    
+    def _calculate_gradient_sequential(self, params: np.ndarray, data: np.ndarray,
+                                     model_type: str, **kwargs) -> np.ndarray:
+        """
+        Calculate gradient sequentially (fallback method)
+        """
+        n_params = len(params)
+        gradient = np.zeros(n_params)
+        
+        for i in range(n_params):
+            gradient[i] = self._calculate_gradient_component(
+                params, data, model_type, i, **kwargs
+            )
+        
+        return gradient
+    
+    def _calculate_gradient_component(self, params: np.ndarray, data: np.ndarray,
+                                    model_type: str, param_index: int, **kwargs) -> float:
+        """
+        Calculate gradient component for a single parameter
+        
+        Parameters:
+        -----------
+        params : np.ndarray
+            Parameter values
+        data : np.ndarray
+            Time series data
+        model_type : str
+            Type of model
+        param_index : int
+            Index of parameter to calculate gradient for
+        **kwargs
+            Additional parameters
+            
+        Returns:
+        --------
+        float
+            Gradient component
+        """
+        # Usar diferencia finita para calcular gradiente
+        h = 1e-8
+        params_plus = params.copy()
+        params_minus = params.copy()
+        
+        params_plus[param_index] += h
+        params_minus[param_index] -= h
+        
+        # Extract parameters for gradient calculation
+        p = kwargs.get('p', 0)
+        q = kwargs.get('q', 0)
+        
+        def extract_params(params):
+            if p > 0 and q > 0:  # ARMA
+                ar_params = params[:p]
+                ma_params = params[p:p+q]
+                sigma2 = params[p+q]
+            elif p > 0:  # AR only
+                ar_params = params[:p]
+                ma_params = np.array([])
+                sigma2 = params[p]
+            elif q > 0:  # MA only
+                ar_params = np.array([])
+                ma_params = params[:q]
+                sigma2 = params[q]
+            else:
+                raise ValueError("At least one of p or q must be positive")
+            return ar_params, ma_params, sigma2
+        
+        ar_plus, ma_plus, sigma2_plus = extract_params(params_plus)
+        ar_minus, ma_minus, sigma2_minus = extract_params(params_minus)
+        
+        ll_plus = self._calculate_log_likelihood(data, ar_plus, ma_plus, sigma2_plus)
+        ll_minus = self._calculate_log_likelihood(data, ar_minus, ma_minus, sigma2_minus)
+        
+        gradient_component = (ll_plus - ll_minus) / (2 * h)
+        return gradient_component
+    
+    def _parallel_parameter_search(self, data: np.ndarray, model_type: str,
+                                 param_ranges: Dict[str, Tuple[float, float]], 
+                                 n_samples: int = 100, **kwargs) -> Dict[str, Any]:
+        """
+        Search for good initial parameters using parallel evaluation
+        
+        Parameters:
+        -----------
+        data : np.ndarray
+            Time series data
+        model_type : str
+            Type of model
+        param_ranges : dict
+            Parameter ranges to search
+        n_samples : int
+            Number of parameter samples to evaluate
+        **kwargs
+            Additional parameters
+            
+        Returns:
+        --------
+        dict
+            Best parameters found
+        """
+        if not self._should_parallelize(n_samples, 'objective_evaluation'):
+            return self._sequential_parameter_search(data, model_type, param_ranges, n_samples, **kwargs)
+        
+        # Generar muestras de parámetros
+        param_samples = self._generate_parameter_samples(param_ranges, n_samples)
+        
+        # Evaluar en paralelo
+        log_likelihoods = self._parallel_objective_evaluation(
+            param_samples, data, model_type, **kwargs
+        )
+        
+        # Encontrar mejor parámetro
+        best_idx = np.argmax(log_likelihoods)
+        best_params = param_samples[best_idx]
+        best_ll = log_likelihoods[best_idx]
+        
+        return {
+            'params': best_params,
+            'log_likelihood': best_ll,
+            'all_likelihoods': log_likelihoods
+        }
+    
+    def _sequential_parameter_search(self, data: np.ndarray, model_type: str,
+                                   param_ranges: Dict[str, Tuple[float, float]], 
+                                   n_samples: int = 100, **kwargs) -> Dict[str, Any]:
+        """
+        Sequential parameter search (fallback method)
+        """
+        param_samples = self._generate_parameter_samples(param_ranges, n_samples)
+        log_likelihoods = []
+        
+        for params in param_samples:
+            # Extract parameters based on model type
+            p = kwargs.get('p', 0)
+            q = kwargs.get('q', 0)
+            
+            if p > 0 and q > 0:  # ARMA
+                ar_params = params[:p]
+                ma_params = params[p:p+q]
+                sigma2 = params[p+q]
+            elif p > 0:  # AR only
+                ar_params = params[:p]
+                ma_params = np.array([])
+                sigma2 = params[p]
+            elif q > 0:  # MA only
+                ar_params = np.array([])
+                ma_params = params[:q]
+                sigma2 = params[q]
+            else:
+                raise ValueError("At least one of p or q must be positive")
+            
+            ll = self._calculate_log_likelihood(data, ar_params, ma_params, sigma2)
+            log_likelihoods.append(ll)
+        
+        best_idx = np.argmax(log_likelihoods)
+        best_params = param_samples[best_idx]
+        best_ll = log_likelihoods[best_idx]
+        
+        return {
+            'params': best_params,
+            'log_likelihood': best_ll,
+            'all_likelihoods': log_likelihoods
+        }
+    
+    def _generate_parameter_samples(self, param_ranges: Dict[str, Tuple[float, float]], 
+                                  n_samples: int) -> list:
+        """
+        Generate random parameter samples within given ranges
+        
+        Parameters:
+        -----------
+        param_ranges : dict
+            Parameter ranges
+        n_samples : int
+            Number of samples to generate
+            
+        Returns:
+        --------
+        list
+            List of parameter arrays
+        """
+        param_names = list(param_ranges.keys())
+        n_params = len(param_names)
+        samples = []
+        
+        for _ in range(n_samples):
+            params = np.zeros(n_params)
+            for i, name in enumerate(param_names):
+                low, high = param_ranges[name]
+                params[i] = np.random.uniform(low, high)
+            samples.append(params)
+        
+        return samples
+    
+    def _get_parameter_ranges(self, p: int, q: int) -> Dict[str, Tuple[float, float]]:
+        """
+        Get parameter ranges for initial parameter search
+        
+        Parameters:
+        -----------
+        p : int
+            AR order
+        q : int
+            MA order
+            
+        Returns:
+        --------
+        dict
+            Parameter ranges
+        """
+        ranges = {}
+        
+        # AR parameters: typically between -0.99 and 0.99
+        for i in range(p):
+            ranges[f'ar_{i+1}'] = (-0.99, 0.99)
+        
+        # MA parameters: typically between -0.99 and 0.99
+        for i in range(q):
+            ranges[f'ma_{i+1}'] = (-0.99, 0.99)
+        
+        # Variance: typically between 0.1 and 10
+        ranges['variance'] = (0.1, 10.0)
+        
+        return ranges
 

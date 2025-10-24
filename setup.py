@@ -10,25 +10,26 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 # Core dependencies
 INSTALL_REQUIRES = [
-    "numpy>=1.21.0",
-    "scipy>=1.7.0",
-    "pandas>=1.3.0",
-    "matplotlib>=3.4.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pandas>=1.5.0",
+    "matplotlib>=3.6.0",
+    "psutil>=5.9.0",
 ]
 
 # Optional PySpark dependencies
 EXTRAS_REQUIRE = {
-    "spark": ["pyspark>=3.2.0"],
+    "spark": ["pyspark>=3.4.0", "pyarrow>=10.0.0"],
     "dev": [
-        "pytest>=7.0.0",
-        "pytest-cov>=3.0.0",
-        "black>=22.0.0",
-        "flake8>=4.0.0",
-        "mypy>=0.950",
+        "pytest>=7.4.0",
+        "pytest-cov>=4.1.0",
+        "black>=23.0.0",
+        "flake8>=6.0.0",
+        "mypy>=1.5.0",
     ],
     "docs": [
-        "sphinx>=4.5.0",
-        "sphinx-rtd-theme>=1.0.0",
+        "sphinx>=7.0.0",
+        "sphinx-rtd-theme>=1.3.0",
     ],
 }
 
@@ -51,12 +52,12 @@ setup(
         "Topic :: Scientific/Engineering :: Mathematics",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     install_requires=INSTALL_REQUIRES,
     extras_require=EXTRAS_REQUIRE,
     include_package_data=True,
