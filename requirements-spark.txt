@@ -1,0 +1,4 @@
+# Optional PySpark dependencies for distributed computing
+pyspark>=3.2.0
+
+
