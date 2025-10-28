@@ -1,4 +1,5 @@
 """
+FOR SARIMA
 Maximum Likelihood Estimation (MLE) optimization engine
 
 Implements MLE parameter estimation for ARIMA models using numerical optimization.

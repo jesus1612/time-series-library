@@ -247,3 +247,5 @@ Where $z_{\alpha/2}$ is the $(1-\alpha/2)$ quantile of the standard normal distr
 
 4. Shumway, R. H., & Stoffer, D. S. (2017). *Time Series Analysis and Its Applications: With R Examples*. Springer.
 
+
+

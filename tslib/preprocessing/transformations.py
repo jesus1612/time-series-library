@@ -506,3 +506,5 @@ class MinMaxScaler(BaseTransformer):
         data = np.asarray(data, dtype=float)
         return (data - self._min_scale) / self._scale
 
+
+
