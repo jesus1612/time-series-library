@@ -1,114 +1,103 @@
 """
-High-level ARIMA model interface
+High-level ARMA model interface
 
-Provides a user-friendly API for ARIMA modeling with automatic model selection,
+Provides a user-friendly API for ARMA modeling with automatic order selection,
 comprehensive diagnostics, and easy-to-use methods following scikit-learn conventions.
 """
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from typing import Union, Optional, Dict, Any, Tuple, List
+from typing import Union, Optional, Dict, Any, Tuple
 from ..core.base import TimeSeriesModel
-from ..core.arima import ARIMAProcess
+from ..core.arima import ARMAProcess
 from ..core.acf_pacf import ACFPACFAnalyzer
 from ..core.stationarity import StationarityAnalyzer
-from ..preprocessing.transformations import DifferencingTransformer, LogTransformer
 from ..preprocessing.validation import DataValidator, DataQualityReport
 from ..metrics.evaluation import ModelEvaluator
-from .selection import ARIMAOrderSelector
+from .selection import ARMAOrderSelector
 
 
-class ARIMAModel(TimeSeriesModel):
+class ARMAModel(TimeSeriesModel):
     """
-    High-level ARIMA model with automatic model selection and comprehensive diagnostics
+    High-level ARMA model with automatic order selection and comprehensive diagnostics
     
-    Provides an easy-to-use interface for ARIMA modeling with automatic parameter
-    selection, data validation, and comprehensive model evaluation.
+    Autoregressive Moving Average (ARMA) models combine AR and MA components
+    to model stationary time series with both autocorrelation and moving average
+    structure. The model automatically identifies optimal orders using ACF/PACF 
+    analysis and grid search.
+    
+    The ARMA(p,q) model is defined as:
+        y_t = c + φ₁y_{t-1} + ... + φₚy_{t-p} + ε_t + θ₁ε_{t-1} + ... + θ_qε_{t-q}
+    
+    where ε_t is white noise, φ₁, ..., φₚ are AR parameters, and θ₁, ..., θ_q are MA parameters.
     """
     
-    def __init__(self, 
-                 order: Optional[Tuple[int, int, int]] = None,
+    def __init__(self,
+                 order: Optional[Tuple[int, int]] = None,
                  trend: str = 'c',
                  auto_select: bool = True,
-                 max_p: int = 5,
-                 max_d: int = 2,
-                 max_q: int = 5,
-                 seasonal: bool = False,
-                 seasonal_periods: Optional[int] = None,
-                 validation: bool = True,
-                 n_jobs: int = -1):
+                 max_ar: int = 5,
+                 max_ma: int = 5,
+                 criterion: str = 'aic',
+                 validation: bool = True):
         """
-        Initialize ARIMA model
+        Initialize ARMA model
         
         Parameters:
         -----------
-        order : tuple (p, d, q), optional
-            ARIMA order. If None and auto_select=True, will be determined automatically
+        order : tuple (p, q), optional
+            ARMA order. If None and auto_select=True, will be determined automatically
         trend : str
-            'c' (constant), 'nc' (no constant)
+            'c' (constant/intercept), 'nc' (no constant)
         auto_select : bool
             Whether to automatically select optimal order
-        max_p : int
-            Maximum AR order for automatic selection
-        max_d : int
-            Maximum differencing order for automatic selection
-        max_q : int
-            Maximum MA order for automatic selection
-        seasonal : bool
-            Whether to include seasonal components (not implemented yet)
-        seasonal_periods : int, optional
-            Number of seasonal periods
+        max_ar : int
+            Maximum AR order to consider for automatic selection
+        max_ma : int
+            Maximum MA order to consider for automatic selection
+        criterion : str
+            Information criterion for model selection: 'aic' or 'bic'
         validation : bool
             Whether to validate input data
-        n_jobs : int
-            Number of parallel jobs (-1 = all cores, 1 = no parallelization)
         """
         super().__init__()
         self.order = order
         self.trend = trend
         self.auto_select = auto_select
-        self.max_p = max_p
-        self.max_d = max_d
-        self.n_jobs = n_jobs
-        self.max_q = max_q
-        self.seasonal = seasonal
-        self.seasonal_periods = seasonal_periods
+        self.max_ar = max_ar
+        self.max_ma = max_ma
+        self.criterion = criterion
         self.validation = validation
         
         # Initialize components
-        self._arima_process = None
+        self._arma_process = None
         self._data_validator = DataValidator() if validation else None
         self._model_evaluator = ModelEvaluator()
         self._acf_pacf_analyzer = ACFPACFAnalyzer()
         self._stationarity_analyzer = StationarityAnalyzer()
-        self._order_selector = ARIMAOrderSelector(
-            max_ar=max_p,
-            max_ma=max_q,
-            max_d=max_d,
-            criterion='aic'
-        )
+        self._order_selector = ARMAOrderSelector(max_ar, max_ma, criterion)
         
         # Store analysis results
         self._acf_pacf_results = None
         self._stationarity_results = None
-        self._model_selection_results = None
+        self._order_selection_results = None
         self._data_quality_report = None
     
-    def fit(self, data: Union[np.ndarray, pd.Series, list], **kwargs) -> 'ARIMAModel':
+    def fit(self, data: Union[np.ndarray, pd.Series, list], **kwargs) -> 'ARMAModel':
         """
-        Fit ARIMA model to data
+        Fit ARMA model to data
         
         Parameters:
         -----------
         data : array-like
-            Time series data
+            Time series data (should be stationary or will be checked)
         **kwargs
             Additional fitting parameters
             
         Returns:
         --------
-        self : ARIMAModel
+        self : ARMAModel
             Fitted model
         """
         # Convert to numpy array
@@ -133,30 +122,37 @@ class ARIMAModel(TimeSeriesModel):
         # Perform exploratory analysis
         self._perform_exploratory_analysis(data)
         
+        # Check stationarity
+        if not self._stationarity_results['is_stationary']:
+            import warnings
+            warnings.warn(
+                "Data appears to be non-stationary. ARMA models require stationary data. "
+                "Consider differencing the data first or using ARIMA model instead.",
+                UserWarning
+            )
+        
         # Determine model order
         if self.auto_select or self.order is None:
-            # Use new ARIMAOrderSelector
-            p, d, q = self._order_selector.select(data)
-            self.order = (p, d, q)
-            self._model_selection_results = {
-                'best_order': self.order,
-                'selection_method': 'ARIMAOrderSelector',
-                'selector_results': self._order_selector.selection_results
-            }
+            p, q = self._order_selector.select(data)
+            self.order = (p, q)
+            self._order_selection_results = self._order_selector.selection_results
+            
+            # Ensure at least (1,1) if selection gives (0,0)
+            if self.order == (0, 0):
+                self.order = (1, 1)
         
-        # Fit the ARIMA model
-        self._arima_process = ARIMAProcess(
+        # Fit the ARMA model
+        self._arma_process = ARMAProcess(
             ar_order=self.order[0],
-            diff_order=self.order[1],
-            ma_order=self.order[2],
+            ma_order=self.order[1],
             trend=self.trend,
-            n_jobs=self.n_jobs
+            n_jobs=1  # Linear implementation
         )
         
-        self._arima_process.fit(data, **kwargs)
+        self._arma_process.fit(data, **kwargs)
         
         # Store fitted parameters
-        self._fitted_params = self._arima_process._fitted_params
+        self._fitted_params = self._arma_process._fitted_params
         self._fitted = True
         
         return self
@@ -165,7 +161,7 @@ class ARIMAModel(TimeSeriesModel):
                 steps: int = 1, 
                 return_conf_int: bool = False,
                 alpha: float = 0.05,
-                **kwargs) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+                **kwargs) -> Union[np.ndarray, Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]]]:
         """
         Generate predictions from the fitted model
         
@@ -176,7 +172,7 @@ class ARIMAModel(TimeSeriesModel):
         return_conf_int : bool
             Whether to return confidence intervals
         alpha : float
-            Significance level for confidence intervals
+            Significance level for confidence intervals (default: 0.05 for 95% CI)
         **kwargs
             Additional prediction parameters
             
@@ -190,32 +186,35 @@ class ARIMAModel(TimeSeriesModel):
         self._validate_fitted()
         
         if return_conf_int:
-            predictions, conf_int = self._arima_process.predict(steps, return_conf_int=True, **kwargs)
+            predictions, conf_int = self._arma_process.predict(steps, return_conf_int=True, **kwargs)
             return predictions, conf_int
         else:
-            return self._arima_process.predict(steps, return_conf_int=False, **kwargs)
+            return self._arma_process.predict(steps, return_conf_int=False, **kwargs)
     
     def get_residuals(self) -> np.ndarray:
         """Get model residuals"""
         self._validate_fitted()
-        return self._arima_process.get_residuals()
+        return self._arma_process.get_residuals()
     
     def get_fitted_values(self) -> np.ndarray:
         """Get fitted values"""
         self._validate_fitted()
-        return self._arima_process.get_fitted_values()
+        return self._arma_process.get_fitted_values()
     
     def summary(self) -> str:
         """Generate comprehensive model summary"""
         self._validate_fitted()
         
-        summary = "ARIMA Model Summary\n"
+        summary = "ARMA Model Summary\n"
         summary += "=" * 60 + "\n\n"
         
         # Model information
-        summary += f"Model: ARIMA{self.order}\n"
+        summary += f"Model: ARMA({self.order[0]},{self.order[1]})\n"
         summary += f"Trend: {self.trend}\n"
-        summary += f"Auto-selection: {self.auto_select}\n\n"
+        summary += f"Auto-selection: {self.auto_select}\n"
+        if self.auto_select:
+            summary += f"Selection criterion: {self.criterion}\n"
+        summary += "\n"
         
         # Data information
         summary += f"Data Information:\n"
@@ -237,21 +236,25 @@ class ARIMAModel(TimeSeriesModel):
             summary += f"  AIC: {self._fitted_params['aic']:.6f}\n"
             summary += f"  BIC: {self._fitted_params['bic']:.6f}\n\n"
         
-        # Add exploratory analysis results
+        # Add ACF/PACF analysis results
         if self._acf_pacf_results:
             summary += "ACF/PACF Analysis:\n"
             suggested = self._acf_pacf_results['suggested_orders']
-            summary += f"  Suggested p: {suggested['suggested_p']}\n"
-            summary += f"  Suggested q: {suggested['suggested_q']}\n\n"
+            summary += f"  Suggested p (from PACF): {suggested['suggested_p']}\n"
+            summary += f"  Suggested q (from ACF): {suggested['suggested_q']}\n"
+            summary += f"  Note: Both ACF and PACF decay gradually for ARMA\n\n"
         
+        # Stationarity analysis
         if self._stationarity_results:
             summary += "Stationarity Analysis:\n"
             summary += f"  Is Stationary: {self._stationarity_results['is_stationary']}\n"
-            summary += f"  Suggested d: {self._stationarity_results['suggested_differencing_order']}\n\n"
+            if not self._stationarity_results['is_stationary']:
+                summary += f"  Warning: ARMA requires stationary data!\n"
+            summary += "\n"
         
         return summary
     
-    def plot_diagnostics(self, figsize: Tuple[int, int] = (12, 8)):
+    def plot_diagnostics(self, figsize: Tuple[int, int] = (12, 10)):
         """
         Plot diagnostic plots for the model
         
@@ -262,8 +265,8 @@ class ARIMAModel(TimeSeriesModel):
         """
         self._validate_fitted()
         
-        fig, axes = plt.subplots(2, 2, figsize=figsize)
-        fig.suptitle(f'ARIMA{self.order} Model Diagnostics', fontsize=16)
+        fig, axes = plt.subplots(3, 2, figsize=figsize)
+        fig.suptitle(f'ARMA({self.order[0]},{self.order[1]}) Model Diagnostics', fontsize=16)
         
         # Get residuals and fitted values
         residuals = self.get_residuals()
@@ -275,6 +278,7 @@ class ARIMAModel(TimeSeriesModel):
         axes[0, 0].set_xlabel('Time')
         axes[0, 0].set_ylabel('Residuals')
         axes[0, 0].axhline(y=0, color='r', linestyle='--')
+        axes[0, 0].grid(True, alpha=0.3)
         
         # 2. Residuals vs Fitted Values
         axes[0, 1].scatter(fitted_values, residuals, alpha=0.6)
@@ -282,29 +286,54 @@ class ARIMAModel(TimeSeriesModel):
         axes[0, 1].set_xlabel('Fitted Values')
         axes[0, 1].set_ylabel('Residuals')
         axes[0, 1].axhline(y=0, color='r', linestyle='--')
+        axes[0, 1].grid(True, alpha=0.3)
         
         # 3. Q-Q Plot
         from scipy import stats
         stats.probplot(residuals, dist="norm", plot=axes[1, 0])
         axes[1, 0].set_title('Q-Q Plot')
+        axes[1, 0].grid(True, alpha=0.3)
         
-        # 4. ACF of Residuals
-        if len(residuals) > 10:
-            from ..core.acf_pacf import ACFCalculator
-            acf_calc = ACFCalculator(max_lags=min(20, len(residuals)//4))
-            lags, acf_values = acf_calc.calculate(residuals)
+        # 4. Histogram of Residuals
+        axes[1, 1].hist(residuals, bins=20, edgecolor='black', alpha=0.7)
+        axes[1, 1].set_title('Histogram of Residuals')
+        axes[1, 1].set_xlabel('Residuals')
+        axes[1, 1].set_ylabel('Frequency')
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        # 5. ACF Plot
+        if self._acf_pacf_results:
+            acf_values = self._acf_pacf_results['acf_values']
+            acf_lags = self._acf_pacf_results['acf_lags']
             
-            axes[1, 1].bar(lags, acf_values, width=0.8)
-            axes[1, 1].set_title('ACF of Residuals')
-            axes[1, 1].set_xlabel('Lag')
-            axes[1, 1].set_ylabel('ACF')
-            axes[1, 1].axhline(y=0, color='k', linestyle='-')
+            axes[2, 0].bar(acf_lags, acf_values, width=0.8)
+            axes[2, 0].set_title('ACF (Gradual Decay for ARMA)')
+            axes[2, 0].set_xlabel('Lag')
+            axes[2, 0].set_ylabel('ACF')
+            axes[2, 0].axhline(y=0, color='k', linestyle='-')
             
             # Add confidence bounds
-            n = len(residuals)
+            n = len(self._data)
             conf_bound = 1.96 / np.sqrt(n)
-            axes[1, 1].axhline(y=conf_bound, color='r', linestyle='--', alpha=0.7)
-            axes[1, 1].axhline(y=-conf_bound, color='r', linestyle='--', alpha=0.7)
+            axes[2, 0].axhline(y=conf_bound, color='r', linestyle='--', alpha=0.7, label='95% CI')
+            axes[2, 0].axhline(y=-conf_bound, color='r', linestyle='--', alpha=0.7)
+            axes[2, 0].legend()
+            axes[2, 0].grid(True, alpha=0.3)
+        
+        # 6. PACF Plot
+        if self._acf_pacf_results:
+            pacf_values = self._acf_pacf_results['pacf_values']
+            pacf_lags = self._acf_pacf_results['pacf_lags']
+            
+            axes[2, 1].bar(pacf_lags, pacf_values, width=0.8)
+            axes[2, 1].set_title('PACF (Gradual Decay for ARMA)')
+            axes[2, 1].set_xlabel('Lag')
+            axes[2, 1].set_ylabel('PACF')
+            axes[2, 1].axhline(y=0, color='k', linestyle='-')
+            axes[2, 1].axhline(y=conf_bound, color='r', linestyle='--', alpha=0.7, label='95% CI')
+            axes[2, 1].axhline(y=-conf_bound, color='r', linestyle='--', alpha=0.7)
+            axes[2, 1].legend()
+            axes[2, 1].grid(True, alpha=0.3)
         
         plt.tight_layout()
         plt.show()
@@ -344,7 +373,12 @@ class ARIMAModel(TimeSeriesModel):
         plt.fill_between(forecast_index, conf_int[0], conf_int[1], 
                         alpha=0.3, color='red', label='95% Confidence Interval')
         
-        plt.title(f'ARIMA{self.order} Forecast')
+        # Add mean line
+        mean_value = np.mean(self._data)
+        plt.axhline(y=mean_value, color='green', linestyle=':', alpha=0.7,
+                   label=f'Mean ({mean_value:.2f})')
+        
+        plt.title(f'ARMA({self.order[0]},{self.order[1]}) Forecast')
         plt.xlabel('Time')
         plt.ylabel('Value')
         plt.legend()
@@ -359,72 +393,17 @@ class ARIMAModel(TimeSeriesModel):
         # Stationarity analysis
         self._stationarity_results = self._stationarity_analyzer.analyze(data)
     
-    def _select_optimal_order(self, data: np.ndarray) -> Tuple[int, int, int]:
-        """
-        Select optimal ARIMA order using information criteria
-        
-        Parameters:
-        -----------
-        data : np.ndarray
-            Time series data
-            
-        Returns:
-        --------
-        optimal_order : tuple
-            Optimal (p, d, q) order
-        """
-        best_aic = np.inf
-        best_order = (0, 0, 0)
-        results = []
-        
-        # Get suggested differencing order
-        suggested_d = self._stationarity_results['suggested_differencing_order']
-        
-        # Search over parameter space
-        for p in range(self.max_p + 1):
-            for d in range(min(suggested_d + 1, self.max_d + 1)):
-                for q in range(self.max_q + 1):
-                    # Skip (0,0,0) model
-                    if p == 0 and q == 0:
-                        continue
-                    
-                    try:
-                        # Fit model
-                        model = ARIMAProcess(p, d, q, self.trend, n_jobs=self.n_jobs)
-                        model.fit(data)
-                        
-                        # Get AIC
-                        aic = model._fitted_params['aic']
-                        results.append((p, d, q, aic))
-                        
-                        # Update best model
-                        if aic < best_aic:
-                            best_aic = aic
-                            best_order = (p, d, q)
-                    
-                    except Exception:
-                        # Skip models that fail to fit
-                        continue
-        
-        # Store model selection results
-        self._model_selection_results = {
-            'best_order': best_order,
-            'best_aic': best_aic,
-            'all_results': results
-        }
-        
-        return best_order
-    
-    def get_model_selection_results(self) -> Optional[Dict[str, Any]]:
-        """Get model selection results"""
-        return self._model_selection_results
+    def get_order_selection_results(self) -> Optional[Dict[str, Any]]:
+        """Get order selection results"""
+        return self._order_selection_results
     
     def get_exploratory_analysis(self) -> Dict[str, Any]:
         """Get exploratory analysis results"""
         return {
             'acf_pacf': self._acf_pacf_results,
             'stationarity': self._stationarity_results,
-            'data_quality': self._data_quality_report
+            'data_quality': self._data_quality_report,
+            'order_selection': self._order_selection_results
         }
     
     def evaluate_forecast(self, 

@@ -377,14 +377,22 @@ class MAProcess(TimeSeriesModel):
         """Get fitted values"""
         self._validate_fitted()
         
-        residuals = self.get_residuals()
+        # Calculate full residuals (not truncated)
         n = len(self._data)
-        fitted = np.zeros(n)
+        residuals_full = np.zeros(n)
         
+        for t in range(self.order, n):
+            predicted = self.mean
+            for i in range(self.order):
+                predicted += self.ma_params[i] * residuals_full[t - i - 1]
+            residuals_full[t] = self._data[t] - predicted
+        
+        # Calculate fitted values using residuals
+        fitted = np.zeros(n)
         for t in range(self.order, n):
             fitted[t] = self.mean
             for i in range(self.order):
-                fitted[t] += self.ma_params[i] * residuals[t - i - 1]
+                fitted[t] += self.ma_params[i] * residuals_full[t - i - 1]
         
         return fitted[self.order:]
     
@@ -612,12 +620,26 @@ class ARMAProcess(TimeSeriesModel):
         """Get fitted values"""
         self._validate_fitted()
         
-        residuals = self.get_residuals()
+        # Calculate full residuals (not truncated)
         n = len(self._data)
-        fitted = np.zeros(n)
-        
         max_order = max(self.ar_order, self.ma_order)
+        residuals_full = np.zeros(n)
         
+        for t in range(max_order, n):
+            predicted = self.constant
+            
+            # AR component
+            for i in range(self.ar_order):
+                predicted += self.ar_params[i] * self._data[t - i - 1]
+            
+            # MA component
+            for i in range(self.ma_order):
+                predicted += self.ma_params[i] * residuals_full[t - i - 1]
+            
+            residuals_full[t] = self._data[t] - predicted
+        
+        # Calculate fitted values using full residuals
+        fitted = np.zeros(n)
         for t in range(max_order, n):
             fitted[t] = self.constant
             
@@ -627,7 +649,7 @@ class ARMAProcess(TimeSeriesModel):
             
             # MA component
             for i in range(self.ma_order):
-                fitted[t] += self.ma_params[i] * residuals[t - i - 1]
+                fitted[t] += self.ma_params[i] * residuals_full[t - i - 1]
         
         return fitted[max_order:]
     

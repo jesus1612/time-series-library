@@ -16,12 +16,15 @@ __version__ = "0.1.0"
 __author__ = "Genaro Melgar"
 
 # Core imports
-from .models import ARIMAModel
+from .models import ARModel, MAModel, ARMAModel, ARIMAModel
 
 # Utility imports
 from .utils.checks import check_spark_availability
 
 __all__ = [
+    "ARModel",
+    "MAModel",
+    "ARMAModel",
     "ARIMAModel",
     "check_spark_availability",
 ]

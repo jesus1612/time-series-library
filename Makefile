@@ -19,7 +19,7 @@ help:
 	@echo "  format         - Format code with black"
 	@echo "  lint           - Lint code with flake8"
 	@echo "  docs           - Generate documentation"
-	@echo "  examples       - Run example scripts"
+	@echo "  examples       - Run all example scripts (AR, MA, ARMA, ARIMA)"
 	@echo "  clean          - Clean build artifacts"
 	@echo "  check-version  - Check Python version compatibility"
 	@echo ""
@@ -50,46 +50,46 @@ check-java:
 # Installation targets
 install: check-version
 	@echo "Installing TSLib with basic dependencies..."
-	pip install -r requirements.txt
-	pip install -e .
+	venv/bin/pip install -r requirements.txt
+	venv/bin/pip install -e .
 
 install-spark: check-version check-java
 	@echo "Installing TSLib with PySpark support..."
-	pip install -r requirements.txt
-	pip install -r requirements-spark.txt
-	pip install -e .
+	venv/bin/pip install -r requirements.txt
+	venv/bin/pip install -r requirements-spark.txt
+	venv/bin/pip install -e .
 
 install-dev: check-version
 	@echo "Installing TSLib with development dependencies..."
-	pip install -r requirements.txt
-	pip install -r requirements-spark.txt
-	pip install -e ".[dev]"
+	venv/bin/pip install -r requirements.txt
+	venv/bin/pip install -r requirements-spark.txt
+	venv/bin/pip install -e ".[dev]"
 
 # Testing targets
 test: check-version
 	@echo "Running all tests..."
-	pytest tests/ -v
+	venv/bin/pytest tests/ -v
 
 test-coverage: check-version
 	@echo "Running tests with coverage..."
-	pytest tests/ --cov=tslib --cov-report=html --cov-report=term-missing -v
+	venv/bin/pytest tests/ --cov=tslib --cov-report=html --cov-report=term-missing -v
 
 test-spark: check-version check-java
 	@echo "Running Spark-specific tests..."
-	@export PATH="/opt/homebrew/opt/openjdk@17/bin:$$PATH" && export JAVA_HOME="/opt/homebrew/opt/openjdk@17" && pytest tests/test_spark_comparison.py tests/test_performance_benchmark.py -v
+	@export PATH="/opt/homebrew/opt/openjdk@17/bin:$$PATH" && export JAVA_HOME="/opt/homebrew/opt/openjdk@17" && venv/bin/pytest tests/test_spark_comparison.py tests/test_performance_benchmark.py -v
 
 benchmark: check-version check-java
 	@echo "Running performance benchmarks..."
-	@export PATH="/opt/homebrew/opt/openjdk@17/bin:$$PATH" && export JAVA_HOME="/opt/homebrew/opt/openjdk@17" && python -m pytest tests/test_performance_benchmark.py::TestPerformanceBenchmark::test_comprehensive_benchmark -v -s
+	@export PATH="/opt/homebrew/opt/openjdk@17/bin:$$PATH" && export JAVA_HOME="/opt/homebrew/opt/openjdk@17" && venv/bin/python -m pytest tests/test_performance_benchmark.py::TestPerformanceBenchmark::test_comprehensive_benchmark -v -s
 
 # Development targets
 format: check-version
 	@echo "Formatting code with black..."
-	black tslib/ tests/ examples/ --line-length 88
+	venv/bin/black tslib/ tests/ examples/ --line-length 88
 
 lint: check-version
 	@echo "Linting code with flake8..."
-	flake8 tslib/ tests/ examples/ --max-line-length 88 --ignore E203,W503
+	venv/bin/flake8 tslib/ tests/ examples/ --max-line-length 88 --ignore E203,W503
 
 # Documentation targets
 docs: check-version
@@ -106,18 +106,27 @@ docs: check-version
 # Example targets
 examples: check-version
 	@echo "Running example scripts..."
+	@echo "Running AR model example..."
+	venv/bin/python examples/ar_example.py
+	@echo ""
+	@echo "Running MA model example..."
+	venv/bin/python examples/ma_example.py
+	@echo ""
+	@echo "Running ARMA model example..."
+	venv/bin/python examples/arma_example.py
+	@echo ""
 	@echo "Running basic ARIMA example..."
-	python examples/basic_arima.py
+	venv/bin/python examples/basic_arima.py
 	@echo ""
 	@echo "Running Spark parallel ARIMA example..."
-	@if python -c "import pyspark" 2>/dev/null; then \
-		python examples/spark_parallel_arima.py; \
+	@if venv/bin/python -c "import pyspark" 2>/dev/null; then \
+		venv/bin/python examples/spark_parallel_arima.py; \
 	else \
 		echo "PySpark not available, skipping Spark example"; \
 	fi
 	@echo ""
 	@echo "Running internal parallelization demo..."
-	python examples/parallel_internal_demo.py
+	venv/bin/python examples/parallel_internal_demo.py
 
 # Cleanup targets
 clean:
@@ -140,7 +149,7 @@ dev-setup: install-dev
 
 quick-test: check-version
 	@echo "Running quick test suite..."
-	pytest tests/test_arima.py -v
+	venv/bin/pytest tests/test_arima.py -v
 
 full-test: test test-spark benchmark
 	@echo "Full test suite completed!"
@@ -148,13 +157,13 @@ full-test: test test-spark benchmark
 # Performance analysis
 profile: check-version
 	@echo "Running performance profiling..."
-	python -m cProfile -o profile_output.prof examples/basic_arima.py
+	venv/bin/python -m cProfile -o profile_output.prof examples/basic_arima.py
 	@echo "Profile saved to profile_output.prof"
 
 # Version and compatibility checks
 check-deps: check-version
 	@echo "Checking dependency versions..."
-	pip list | grep -E "(numpy|scipy|pandas|matplotlib|pyspark)"
+	venv/bin/pip list | grep -E "(numpy|scipy|pandas|matplotlib|pyspark)"
 
 # Docker support (if needed)
 docker-build:
@@ -172,7 +181,7 @@ ci-test: install-dev test-coverage lint
 # Release helpers
 version-check:
 	@echo "Current version information:"
-	@python -c "import tslib; print(f'TSLib version: {getattr(tslib, \"__version__\", \"unknown\")}')" 2>/dev/null || echo "TSLib not installed"
+	@venv/bin/python -c "import tslib; print(f'TSLib version: {getattr(tslib, \"__version__\", \"unknown\")}')" 2>/dev/null || echo "TSLib not installed"
 
 # Help for specific targets
 help-install:
